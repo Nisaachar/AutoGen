@@ -1,93 +1,75 @@
-from langdetect import detect
-from deep_translator import GoogleTranslator
-import autogen
-import openai
 import os
+import asyncio
+from autogen_ext.models.openai import OpenAIChatCompletionClient
+from autogen import AssistantAgent, UserProxyAgent, GroupChat, GroupChatManager
+from autogen_agentchat.messages import TextMessage
+from autogen_core import CancellationToken
 
-# Set your OpenAI API key
-# openai.api_key = os.getenv('')
-
+# Retrieve the API key from environment variables
 api_key = os.getenv("OPENAI_API_KEY")
 
-# Ensure OpenAI client is properly initialized
-client = openai.OpenAI(api_key=api_key)
+# Define OpenAI Model Configuration (Fixed)
+llm_config = {
+    "config_list": [
+        {
+            "model": "gpt-4o",
+            "api_key": api_key,
+        }
+    ],
+}
 
+# User Proxy Agent (Represents the human user submitting tickets)
+user_proxy = UserProxyAgent(
+    name="User_proxy",
+    system_message="A human admin interacting with AI agents.",
+    human_input_mode="TERMINATE",  # Stops after initial input
+    code_execution_config={"use_docker": False},  # Disable Docker Execution
+)
 
-class LanguageDetectionAgent(autogen.Agent):
-    def __init__(self, name):
-        super().__init__(name=name)
+# Language Detector Agent
+language_detector = AssistantAgent(
+    name="LanguageDetector",
+    system_message="Detect the language of the provided text and respond with the two-letter language code (e.g., 'en' for English, 'es' for Spanish, 'fr' for French). If the text is already in English, just return 'en'.",
+    llm_config=llm_config,  
+)
 
-    def detect_language(self, text):
-        try:
-            language = detect(text)
-            return language
-        except Exception as e:
-            return f"Error detecting language: {str(e)}"
+# Translation Agent (Translates to English if necessary)
+translation_agent = AssistantAgent(
+    name="TranslationAgent",
+    system_message="If the given text is NOT in English, translate it into English. If it is already in English, return the text as is.",
+    llm_config=llm_config,  
+)
 
-class TranslationAgent(autogen.Agent):
-    def __init__(self, name):
-        super().__init__(name=name)
+# GroupChat Setup (Now has Language Detector & Translation Agent)
+groupchat = GroupChat(
+    agents=[user_proxy, language_detector, translation_agent], 
+    messages=[], 
+    max_round=12
+)
+manager = GroupChatManager(groupchat=groupchat)
 
-    def translate_to_english(self, text, source_language):
-        try:
-            translated_text = GoogleTranslator(source=source_language, target='en').translate(text)
-            return translated_text
-        except Exception as e:
-            return f"Error translating text: {str(e)}"
-
-class CategorizationAgent(autogen.Agent):
-    def __init__(self, name):
-        super().__init__(name=name)
-
-    def categorize_ticket(self, text):
-        """Uses OpenAI's GPT-4 to categorize the ticket into 'Hardware', 'Accounting', or 'Software'."""
-        prompt = f"""
-        You are an AI helpdesk assistant. Categorize the following ticket into one of the three categories: 
-        - 'Hardware' (for issues related to physical devices like printers, mice, and keyboards)
-        - 'Accounting' (for billing, invoices, and financial matters)
-        - 'Software' (for application-related issues, installations, or errors)
-        
-        Ticket: "{text}"
-        
-        Respond with ONLY the category name: 'Hardware', 'Accounting', or 'Software'.
-        """
-
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "system", "content": "You are a classification assistant."},
-                          {"role": "user", "content": prompt}],
-                max_tokens=10,
-                temperature=0
-            )
-            category = response.choices[0].message.content.strip()
-            return category
-        except Exception as e:
-            return f"Error categorizing text: {str(e)}"
-        
-
-# Create instances of the agents
-language_agent = LanguageDetectionAgent(name="LanguageDetector")
-translation_agent = TranslationAgent(name="Translator")
-categorization_agent = CategorizationAgent(name="Categorizer")
-
-def process_ticket(ticket_text):
-    language = language_agent.detect_language(ticket_text)
-    print(f"Detected Language: {language}")
+# Function to process user input
+def handle_ticket(ticket_text: str) -> None:
+    # Step 1: Detect Language
+    response = manager.initiate_chat(user_proxy, message=f"Detect the language of the following text: {ticket_text}")
     
-    if language != "en":
-        translated_text = translation_agent.translate_to_english(ticket_text, language)
-        print(f"Translated Text: {translated_text}")
+    # Step 2: Extract detected language from response
+    print(response)
+    detected_language = response.chat_history[-1]["content"].strip().lower() if response.chat_history else ""
+    # print(response)
+    
+    # Step 3: If the text is not in English, call the translation agent
+    if detected_language != "en":
+        print(f"Detected Language: {detected_language}. Translating...")
+        translation_response = manager.initiate_chat(user_proxy, message=f"Translate the following text to English: {ticket_text}")
+        translated_text = translation_response.get("last_message", {}).get("content", "").strip()
+        print(f"Translated Ticket: {translated_text}")
     else:
-        translated_text = ticket_text
-    
-    category = categorization_agent.categorize_ticket(translated_text)
-    print(f"Ticket Category: {category}")
+        print("The ticket is already in English. No translation needed.")
 
-    return translated_text, category
+# Example Test Cases
+print("------ Test 1: Spanish Ticket ------")
+handle_ticket("Este es un problema con mi computadora portátil.")
 
-# Example usage
-ticket_text = "Bonjour, nous rencontrons un problème avec notre matériel IP PBX. Les connexions sont instables et nous observons des interruptions fréquentes. Cela affecte fortement notre communication interne. Votre assistance serait très appréciée pour régler ce problème rapidement."
-processed_text, category = process_ticket(ticket_text)
-print(f"Final Processed Text: {processed_text}")
-print(f"Final Ticket Category: {category}")
+print("\n------ Test 2: English Ticket ------")
+handle_ticket("My laptop is not turning on.")
