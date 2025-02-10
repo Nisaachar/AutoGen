@@ -40,6 +40,6 @@ def process_ticket(ticket_text):
     return ticket_text
 
 # Example usage
-ticket_text = "Sehr geehrte Damen und Herren, mein SFX-Netzte."
+ticket_text = "Dear Support Team, I've been using the Wireless Mouse I purchased recently, and all of a sudden, it just stopped working. I've tried changing the batteries and reconnecting it, but nothing helps. Could you please provide a solution?"
 processed_text = process_ticket(ticket_text)
 print(f"Final Processed Text: {processed_text}")
