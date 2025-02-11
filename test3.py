@@ -138,7 +138,7 @@ class SolutionSuggestionAgent(autogen.Agent):
 
 def send_alert_email():
     """Simulates sending an email if priority is 1."""
-    print("Sending mail to head-support@company.com...")
+    print("\n\nThis is a priority ticket and hence sending mail to head-support@lilly.com... 📩")
 
 
 # Create instances of the agents
@@ -154,30 +154,32 @@ def process_ticket(ticket_text):
     
     # Detect the language
     language = language_agent.detect_language(ticket_text)
-    print(f"Detected Language: {language}")
+    print(f"\nDetected Language: {language}")
     
     # Translate if not in English
     if language != "en":
         translated_text = translation_agent.translate_to_english(ticket_text, language)
-        print(f"Translated Text: {translated_text}")
+        print(f"\nTranslated Text: {translated_text}")
     else:
         translated_text = ticket_text
+        print('\nThe ticket text is already in English and hence requires no translation.')
     
     # Categorize the ticket
     category = categorization_agent.categorize_ticket(translated_text)
-    print(f"Ticket Category: {category}")
+    print(f"\n\nThe ticket is categorized as: {category}")
 
     # Determine ticket priority
     priority = priority_agent.determine_priority(translated_text)
-    print(f"Ticket Priority: {priority}")
+    print(f"\n\nTicket's Priority is: {priority}")
 
     if priority == "1":
         send_alert_email()
     else:
         # If priority is not 1, generate a troubleshooting message for the user
         solution, youtube_videos, article = solution_agent.generate_suggestion(translated_text)
-        print(f"Suggested Solution for User: {solution}")
-        print("📺 Recommended YouTube Videos:")
+        print(f"\n\n****Suggested Solution for User**** \n\n{solution}")
+        
+        print("\n\n📺 Recommended YouTube Videos:")
         flag = 0
         for video in youtube_videos:
             if flag == 0:
@@ -185,7 +187,7 @@ def process_ticket(ticket_text):
                 continue
             print(f"🔗 {video}")
             
-        print("📝 Recommended Article:")
+        print("\n📝 Recommended Article:")
         for link in article:
             print(f"🔗 {link}")
 
@@ -195,11 +197,14 @@ def process_ticket(ticket_text):
 
 # Example usage
 ticket_text = """
-I'm trying to get a print out from the company printer but not sure hot to do it.
+Bonjour, nous rencontrons un problème avec notre matériel IP PBX. Les connexions sont instables et nous observons des interruptions fréquentes. Cela affecte fortement notre communication interne. Votre assistance serait très appréciée pour régler ce problème rapidement.
 """
 
-processed_text, category, priority = process_ticket(ticket_text)
 
-print(f"Final Processed Text: {processed_text}")
-print(f"Final Ticket Category: {category}")
-print(f"Final Ticket Priority: {priority}")
+process_ticket(ticket_text)
+
+
+# processed_text, category, priority = process_ticket(ticket_text)
+# print(f"Final Processed Text: {processed_text}")
+# print(f"Final Ticket Category: {category}")
+# print(f"Final Ticket Priority: {priority}")
