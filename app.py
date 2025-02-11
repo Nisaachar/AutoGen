@@ -1,75 +1,232 @@
+import streamlit as st
+from langdetect import detect
+from deep_translator import GoogleTranslator
+import autogen
+import openai
 import os
-import asyncio
-from autogen_ext.models.openai import OpenAIChatCompletionClient
-from autogen import AssistantAgent, UserProxyAgent, GroupChat, GroupChatManager
-from autogen_agentchat.messages import TextMessage
-from autogen_core import CancellationToken
+from googlesearch import search
 
-# Retrieve the API key from environment variables
+# Set your OpenAI API key
 api_key = os.getenv("OPENAI_API_KEY")
 
-# Define OpenAI Model Configuration (Fixed)
-llm_config = {
-    "config_list": [
-        {
-            "model": "gpt-4o",
-            "api_key": api_key,
-        }
-    ],
-}
+# Ensure OpenAI client is properly initialized
+client = openai.OpenAI(api_key=api_key)
 
-# User Proxy Agent (Represents the human user submitting tickets)
-user_proxy = UserProxyAgent(
-    name="User_proxy",
-    system_message="A human admin interacting with AI agents.",
-    human_input_mode="TERMINATE",  # Stops after initial input
-    code_execution_config={"use_docker": False},  # Disable Docker Execution
-)
 
-# Language Detector Agent
-language_detector = AssistantAgent(
-    name="LanguageDetector",
-    system_message="Detect the language of the provided text and respond with the two-letter language code (e.g., 'en' for English, 'es' for Spanish, 'fr' for French). If the text is already in English, just return 'en'.",
-    llm_config=llm_config,  
-)
+class LanguageDetectionAgent(autogen.Agent):
+    def __init__(self, name):
+        super().__init__(name=name)
 
-# Translation Agent (Translates to English if necessary)
-translation_agent = AssistantAgent(
-    name="TranslationAgent",
-    system_message="If the given text is NOT in English, translate it into English. If it is already in English, return the text as is.",
-    llm_config=llm_config,  
-)
+    def detect_language(self, text):
+        st.subheader("Results")
+        try:
+            language = detect(text)
+            return language
+        except Exception as e:
+            return f"Error detecting language: {str(e)}"
 
-# GroupChat Setup (Now has Language Detector & Translation Agent)
-groupchat = GroupChat(
-    agents=[user_proxy, language_detector, translation_agent], 
-    messages=[], 
-    max_round=12
-)
-manager = GroupChatManager(groupchat=groupchat)
 
-# Function to process user input
-def handle_ticket(ticket_text: str) -> None:
-    # Step 1: Detect Language
-    response = manager.initiate_chat(user_proxy, message=f"Detect the language of the following text: {ticket_text}")
+class TranslationAgent(autogen.Agent):
+    def __init__(self, name):
+        super().__init__(name=name)
+
+    def translate_to_english(self, text, source_language):
+        try:
+            translated_text = GoogleTranslator(source=source_language, target='en').translate(text)
+            return translated_text
+        except Exception as e:
+            return f"Error translating text: {str(e)}"
+
+
+class CategorizationAgent(autogen.Agent):
+    def __init__(self, name):
+        super().__init__(name=name)
+
+    def categorize_ticket(self, text):
+        """Uses OpenAI's GPT-4 to categorize the ticket into 'Hardware', 'Accounting', or 'Software'."""
+        prompt = f"""
+        You are an AI helpdesk assistant. Categorize the following ticket into one of the three categories: 
+        - 'Hardware' (for issues related to physical devices like printers, mice, and keyboards)
+        - 'Accounting' (for billing, invoices, and financial matters)
+        - 'Software' (for application-related issues, installations, or errors)
+        
+        Ticket: "{text}"
+        
+        Respond with ONLY the category name: 'Hardware', 'Accounting', or 'Software'.
+        """
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": "You are a classification assistant."},
+                          {"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0
+            )
+            category = response.choices[0].message.content.strip()
+            return category
+        except Exception as e:
+            return f"Error categorizing text: {str(e)}"
+
+
+class PriorityDeterminationAgent(autogen.Agent):
+    def __init__(self, name):
+        super().__init__(name=name)
+
+    def determine_priority(self, text):
+        """Uses OpenAI's GPT-4 to determine the priority level (1, 2, or 3)."""
+        prompt = f"""
+        You are a helpdesk assistant determining the priority level of a ticket.
+        Assign a priority level based on the following criteria:
+        
+        - Priority 1 (High): Critical issues (e.g., system outages, major financial discrepancies, urgent security concerns, severe hardware failures).
+        - Priority 2 (Medium): Important but not urgent issues (e.g., incorrect invoice, software bugs affecting workflow, non-critical hardware issues).
+        - Priority 3 (Low): Minor issues (e.g., general inquiries, feature requests, small inconveniences).
+
+        Ticket: "{text}"
+
+        Respond with ONLY the priority number: 1, 2, or 3.
+        """
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": "You are a helpdesk assistant determining ticket priority."},
+                          {"role": "user", "content": prompt}],
+                max_tokens=10,
+                temperature=0
+            )
+            priority = response.choices[0].message.content.strip()
+            return priority
+        except Exception as e:
+            return f"Error determining priority: {str(e)}"
+        
+
+#Drafting solution for user.
+class SolutionSuggestionAgent(autogen.Agent):
+    def __init__(self, name):
+        super().__init__(name=name)
+
+    def generate_suggestion(self, text):
+        """Uses OpenAI's GPT-4 to suggest a possible solution and fetch relevant resources."""
+        prompt = f"""
+        You are an AI helpdesk assistant. Provide a helpful troubleshooting message to the user for their issue.
+
+        Ticket: "{text}"
+
+        Suggest a possible solution that the user can try on their own.
+
+        Keep it short and to the point.
+        """
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "system", "content": "You are a troubleshooting assistant."},
+                          {"role": "user", "content": prompt}],
+                max_tokens=100,
+                temperature=0.5
+            )
+            solution = response.choices[0].message.content.strip()
+
+            # Fetch additional resources (2 YouTube videos + 1 Article)
+            youtube_videos = list(search(f"site:youtube.com {text} troubleshooting", num_results=2))
+            article = list(search(f"{text} troubleshooting guide", num_results=1))
+
+            return solution, youtube_videos, article
+
+        except Exception as e:
+            return f"Error generating solution: {str(e)}", [], []
+
+def send_alert_email():
+    """Simulates sending an email if priority is 1."""
+    st.write("\n\nThis is a priority ticket and hence sending mail to head-support@lilly.com... 📩")
+
+
+# Create instances of the agents
+language_agent = LanguageDetectionAgent(name="LanguageDetector")
+translation_agent = TranslationAgent(name="Translator")
+categorization_agent = CategorizationAgent(name="Categorizer")
+priority_agent = PriorityDeterminationAgent(name="PriorityAssigner")
+solution_agent = SolutionSuggestionAgent(name="SolutionAssistant")
+
+
+def process_ticket(ticket_text):
+    """Processes a helpdesk ticket by detecting language, translating if necessary, categorizing, and determining priority."""
     
-    # Step 2: Extract detected language from response
-    print(response)
-    detected_language = response.chat_history[-1]["content"].strip().lower() if response.chat_history else ""
-    # print(response)
+    # Detect the language
+    language = language_agent.detect_language(ticket_text)
+    print(f"\nDetected Language: {language}")
+    st.write(f'\nDetected Language: **{language}**')
     
-    # Step 3: If the text is not in English, call the translation agent
-    if detected_language != "en":
-        print(f"Detected Language: {detected_language}. Translating...")
-        translation_response = manager.initiate_chat(user_proxy, message=f"Translate the following text to English: {ticket_text}")
-        translated_text = translation_response.get("last_message", {}).get("content", "").strip()
-        print(f"Translated Ticket: {translated_text}")
+    # Translate if not in English
+    if language != "en":
+        st.text(f'Original Text: \n{ticket_text}')
+        translated_text = translation_agent.translate_to_english(ticket_text, language)
+        print(f"\nTranslated Text: {translated_text}")
+        st.text(f"\nTranslated Text: {translated_text}")
     else:
-        print("The ticket is already in English. No translation needed.")
+        translated_text = ticket_text
+        print('\nThe ticket text is already in English and hence requires no translation.')
+        st.text('\nThe ticket text is already in English and hence requires no translation.')
+    
+    # Categorize the ticket
+    category = categorization_agent.categorize_ticket(translated_text)
+    print(f"\n\nThe ticket is categorized as: {category}")
+    st.write(f"\n\nThe ticket is categorized as: **{category}**")
 
-# Example Test Cases
-print("------ Test 1: Spanish Ticket ------")
-handle_ticket("Este es un problema con mi computadora portátil.")
+    # Determine ticket priority
+    priority = priority_agent.determine_priority(translated_text)
+    print(f"\n\nTicket's Priority is: {priority}")
+    st.write(f"\n\nTicket's Priority is: **{priority}**")
 
-print("\n------ Test 2: English Ticket ------")
-handle_ticket("My laptop is not turning on.")
+    if priority == "1":
+        send_alert_email()
+    else:
+        with st.spinner("Generating solution for the user..."):
+        # If priority is not 1, generate a troubleshooting message for the user
+            solution, youtube_videos, article = solution_agent.generate_suggestion(translated_text)
+            st.write(f"\n\n****Suggested Solution for User**** \n\n{solution}")
+            
+            st.write("\n\n📺 Recommended YouTube Videos:")
+            flag = 0
+            for video in youtube_videos:
+                if flag == 0:
+                    flag += 1
+                    continue
+                st.write(f"🔗 {video}")
+                
+            st.write("\n📝 Recommended Article:")
+            for link in article:
+                st.write(f"🔗 {link}")
+
+
+    return translated_text, category, priority
+
+
+# # Example usage
+# ticket_text = """
+# Bonjour, nous rencontrons un problème avec notre matériel IP PBX. Les connexions sont instables et nous observons des interruptions fréquentes. Cela affecte fortement notre communication interne. Votre assistance serait très appréciée pour régler ce problème rapidement.
+# """
+
+# processed_text, category, priority = process_ticket(ticket_text)
+# print(f"Final Processed Text: {processed_text}")
+# print(f"Final Ticket Category: {category}")
+# print(f"Final Ticket Priority: {priority}")
+
+# Streamlit UI
+st.title("Helpdesk Ticket Processor")
+
+# Dropdown with example tickets
+ticket_options = [
+    "Hello Support Team,\nI've been experiencing an issue with the Arbitrum software. The user interface fails to load properly upon startup. I've tried reinstalling the application and clearing the cache, but the problem persists. Could you please assist in resolving this matter?\nBest Regards,\nSarah Becker.",
+    "Bonjour, nous rencontrons un problème avec notre matériel IP PBX. Les connexions sont instables et nous observons des interruptions fréquentes. Cela affecte fortement notre communication interne. Votre assistance serait très appréciée pour régler ce problème rapidement.",
+    "Hello Team, My printer is not working."
+]
+
+ticket_choice = st.selectbox("Select a ticket issue:", ticket_options)
+
+if st.button("Process Ticket"):
+    ticket_text = ticket_choice
+
+    process_ticket(ticket_text)
